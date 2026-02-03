@@ -1,0 +1,30 @@
+{
+    "manifest_version": 2,
+    "name": "Reddit thread extraction",
+    "version": "1.0",
+    "description": "Extract threads from subreddits",
+    "icons": {
+        "48": "icons/icon-48.png"
+    },
+    "permissions": [
+        "tabs",
+        "scripting",
+        "downloads",
+        "<all_urls>"
+    ],
+    "sidebar_action": {
+        "default_title": "Reddit thread extraction",
+        "default_icon": "icons/icon-48.png",
+        "default_panel": "ui/sidebar.html"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "*://old.reddit.com/*"
+            ],
+            "js": [
+                "reddit.js"
+            ]
+        }
+    ]
+}

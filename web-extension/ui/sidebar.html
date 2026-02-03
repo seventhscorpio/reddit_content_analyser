@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="pl">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+        <link
+            href="https://fonts.googleapis.com/css2?family=Abril+Fatface&family=Noto+Sans:ital,wght@0,100..900;1,100..900&display=swap"
+            rel="stylesheet"
+        />
+        <link href="sidebar.css" rel="stylesheet" />
+        <script src="sidebar.js" defer></script>
+        <title>Reddit extractor</title>
+    </head>
+
+    <body>
+        <section>
+            <h2>Instrukcja</h2>
+            <ol>
+                <li>
+                    Przejdź na interesujący Cię subreddit i wybierz dowolne
+                    sortowanie (gorące, najnowsze, wschodzące itp.)
+                </li>
+                <li>
+                    Kliknij przycisk "Wygeneruj indeks". Skrypt przejmie
+                    kontrolę nad stroną i gdy nie znajdzie kolejnych postów,
+                    pobierze plik .json z indeksem postów. Możesz też w każdej
+                    chwili zatrzymać generowanie indeksu, wtedy pobierze się
+                    plik z dotychczas zebranymi postami
+                </li>
+                <li>
+                    Kliknij przycisk "Załaduj indeks" i wybierz wcześniej
+                    wygenerowany indeks. Możemy to zrobić z jakiejkolwiek strony
+                </li>
+                <li>
+                    Możesz wybrać zakres postów, jaki chcesz pobrać, za pomocą
+                    dwóch pól liczbowych, które się pojawią
+                </li>
+                <li>
+                    Kliknij "Pobierz wątki z indeksu". Posty zaczną się pobierać
+                    do JSONów, można przerwać kiedy się chce
+                </li>
+            </ol>
+            <p>
+                Można też pobrać pojedyńczy wątek, ten, który mamy aktualnie
+                otwarty w przeglądarce, za pomocą przycisku "Pobierz aktualny
+                wątek"
+            </p>
+            <p>
+                Uwaga: rozszerzenie nie jest idiotoodporne. Załadowanie złego
+                pliku indeksu lub odpalenie generowania indeksu na złej stronie
+                na pierwszy rzut oka zadziała, ale wypluje śmieci, także uwaga
+                na to
+            </p>
+        </section>
+        <section class="task">
+            <h2>Indeks</h2>
+            <p class="status"></p>
+            <button id="task-get-full-index-start">Wygeneruj indeks</button>
+            <button id="task-get-full-index-stop">
+                Zatrzymaj generowanie indeksu
+            </button>
+        </section>
+        <section class="task">
+            <h2>Wątek</h2>
+            <p class="status" id="thread-status">Nie załadowano indeksu</p>
+
+            <button id="task-load-index">Załaduj indeks</button>
+            <div class="range" id="thread-index-range">
+                <input type="number" min="0" id="thread-index-bottom-range" />
+                <input type="number" min="0" id="thread-index-top-range" />
+            </div>
+
+            <button id="task-get-all-threads-start">
+                Pobierz wątki z indeksu
+            </button>
+            <button id="task-get-all-threads-stop">
+                Zatrzymaj pobieranie wątków
+            </button>
+
+            <hr />
+
+            <button id="task-get-current-thread">Pobierz aktualny wątek</button>
+        </section>
+    </body>
+</html>
