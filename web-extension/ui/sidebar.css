@@ -59,7 +59,7 @@ body > section.task > .range {
     gap: 8px;
 }
 
-body > section.task > .range > input {
+body > section.task input {
     display: block;
     width: 20px !important;
     min-width: unset !important;
@@ -70,6 +70,16 @@ body > section.task > .range > input {
     color: #ff4500;
     font-weight: bold;
     border: unset;
+}
+
+body > section.task > label,
+body > section.task > label > input {
+    min-width: 100% !important;
+    width: 100% !important;
+}
+
+body > section.task > label > input {
+    margin-top: 8px;
 }
 
 body > section.task > hr {

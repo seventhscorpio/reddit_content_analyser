@@ -1,5 +1,9 @@
 const output = document.getElementById('output')
 
+function getDelayInMs() {
+    return +document.getElementById('task-delay').value * 1000
+}
+
 /**
  * Wait for some amount of time
  * @param {number} time
@@ -7,7 +11,7 @@ const output = document.getElementById('output')
  */
 function wait(time) {
     // Randomize time
-    const delta = time * 0.5
+    const delta = time * 0.35
     const min = -delta
     const max = delta
 
@@ -118,7 +122,7 @@ class GetFullIndexTask {
             // Go to a next index page, if it does exist
             if (currentPageInfo.nextPageUrl) {
                 await changeURL(currentPageInfo.nextPageUrl)
-                await wait(2000)
+                await wait(getDelayInMs())
             } else {
                 break
             }
@@ -247,7 +251,7 @@ class GetThreadTask {
 
             // Go to thread URL
             await changeURL(summary.url)
-            await wait(2000)
+            await wait(getDelayInMs())
 
             // Download
             await this.download()
