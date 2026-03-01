@@ -7,7 +7,6 @@ function getDelayInMs() {
 /**
  * Wait for some amount of time
  * @param {number} time
- * @returns {Promise}
  */
 function wait(time) {
     // Randomize time
@@ -18,7 +17,12 @@ function wait(time) {
     const randomTime = time + Math.random() * (max - min) + min
 
     // https://stackoverflow.com/a/39914235
-    return new Promise((resolve) => setTimeout(resolve, randomTime))
+    const promise = new Promise((resolve) => setTimeout(resolve, randomTime))
+
+    return {
+        promise,
+        randomTime,
+    }
 }
 
 async function runAction(scriptName) {
@@ -71,6 +75,7 @@ function pickFile() {
 }
 
 class GetFullIndexTask {
+    #statusEl
     #startButtonEl
     #stopButtonEl
 
@@ -85,6 +90,8 @@ class GetFullIndexTask {
     }
 
     constructor() {
+        this.#statusEl = document.getElementById('index-status')
+
         this.#startButtonEl = document.getElementById(
             'task-get-full-index-start',
         )
@@ -102,6 +109,7 @@ class GetFullIndexTask {
     async start() {
         let fullIndex = []
         let currentPageInfo
+        let count = 1
 
         this.#showStopButton()
 
@@ -116,13 +124,16 @@ class GetFullIndexTask {
             // Get current page index entries
             const currentIndex = await runAction('get_index.js')
             fullIndex.push(...currentIndex)
-            console.log(currentIndex)
-            console.log(currentPageInfo)
 
             // Go to a next index page, if it does exist
             if (currentPageInfo.nextPageUrl) {
                 await changeURL(currentPageInfo.nextPageUrl)
-                await wait(getDelayInMs())
+                const { promise, randomTime } = wait(getDelayInMs())
+
+                this.#statusEl.innerText = `Odwiedzone strony: ${count}\nCzas oczekiwania: ${Math.floor(randomTime / 1000)}s`
+                await promise
+
+                count += 1
             } else {
                 break
             }
@@ -230,8 +241,8 @@ class GetThreadTask {
         this.#statusEl.innerText = `Załadowano indeks z liczbą wątków: ${index.length}`
 
         this.#rangeBottomEl.value = 0
-        this.#rangeTopEl.value = index.length
-        this.#rangeTopEl.max = index.length
+        this.#rangeTopEl.value = index.length - 1
+        this.#rangeTopEl.max = index.length - 1
 
         this.#index = index
         this.#showIndexUI()
@@ -251,7 +262,10 @@ class GetThreadTask {
 
             // Go to thread URL
             await changeURL(summary.url)
-            await wait(getDelayInMs())
+            const { promise, randomTime } = wait(getDelayInMs())
+
+            this.#statusEl.innerText = `Status pobierania: ${i}/${topRange}\nCzas oczekiwania: ${Math.floor(randomTime / 1000)}s`
+            await promise
 
             // Download
             await this.download()
