@@ -646,7 +646,8 @@ def run(args: argparse.Namespace) -> int:
     rules_path = Path(args.rules)
     out_tagged = Path(args.out_tagged)
     out_phrases = Path(args.out_phrases)
-    out_xlsx = Path(args.out_xlsx) if args.out_xlsx else None
+    out_xlsx_value = getattr(args, "out_xlsx", None)
+    out_xlsx = Path(out_xlsx_value) if out_xlsx_value else None
 
     LOG.info("Data directory: %s", data_dir)
     if not data_dir.is_dir():
@@ -762,6 +763,7 @@ def run_self_test() -> int:
             rules=str(rules_path),
             out_tagged=str(out_tagged),
             out_phrases=str(out_phrases),
+            out_xlsx=None,
             case_sensitive=False,
             whole_word=False,
             threads=1,
