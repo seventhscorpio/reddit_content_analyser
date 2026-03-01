@@ -644,8 +644,14 @@ def run(args: argparse.Namespace) -> int:
     """Main processing pipeline."""
     data_dir = Path(args.data_dir).resolve() if args.data_dir else resolve_default_data_dir()
     rules_path = Path(args.rules)
-    out_tagged = Path(args.out_tagged)
-    out_phrases = Path(args.out_phrases)
+    output_dir_value = getattr(args, "output_dir", None)
+    output_dir = Path(output_dir_value) if output_dir_value else None
+    out_tagged = Path(args.out_tagged) if args.out_tagged else (
+        (output_dir / "tagged_content.csv") if output_dir else Path("tagged_content.csv")
+    )
+    out_phrases = Path(args.out_phrases) if args.out_phrases else (
+        (output_dir / "phrases_found.csv") if output_dir else Path("phrases_found.csv")
+    )
     out_xlsx_value = getattr(args, "out_xlsx", None)
     out_xlsx = Path(out_xlsx_value) if out_xlsx_value else None
 
@@ -784,8 +790,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Directory with JSON files (default: ..\\Data\\Demo data relative to script).",
     )
     parser.add_argument("--rules", required=True, help="Path to coding_rules.csv.")
-    parser.add_argument("--out-tagged", required=True, help="Output tagged_content.csv.")
-    parser.add_argument("--out-phrases", required=True, help="Output phrases_found.csv.")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help=(
+            "Base directory for default output files. Used for files not explicitly set "
+            "via --out-tagged / --out-phrases / --out-xlsx."
+        ),
+    )
+    parser.add_argument(
+        "--out-tagged",
+        default=None,
+        help=(
+            "Output tagged_content.csv path. Default: tagged_content.csv "
+            "(or <output-dir>/tagged_content.csv when --output-dir is set)."
+        ),
+    )
+    parser.add_argument(
+        "--out-phrases",
+        default=None,
+        help=(
+            "Output phrases_found.csv path. Default: phrases_found.csv "
+            "(or <output-dir>/phrases_found.csv when --output-dir is set)."
+        ),
+    )
     parser.add_argument(
         "--out-xlsx",
         help="Optional XLSX output containing tagged_content and phrases_found sheets.",
