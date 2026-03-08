@@ -3,3 +3,4 @@ test/out/*
 test/__pycache__/*
 .pytest_cache/*
 __pycache__/*
+test/demo_coding_rules/*

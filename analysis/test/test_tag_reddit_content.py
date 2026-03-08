@@ -4,10 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Set
-from unittest.mock import patch
 
 import pytest
 
@@ -15,6 +13,9 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import tag_reddit_content as trc
+
+TEST_DIR = Path(__file__).resolve().parent
+DEMO_RULES_CSV = TEST_DIR / "demo_coding_rules" / "coding_rules.csv"
 
 
 # ---------------------------------------------------------------------------
@@ -29,37 +30,35 @@ def tmp_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def sample_post() -> Dict[str, Any]:
-    """Minimal Reddit post dict."""
+    """Minimal Reddit post dict using keywords from coding_rules.csv."""
     return {
         "id": "abc123",
         "subreddit": "testsub",
         "author": "alice",
         "created_utc": 1700000000,
-        "title": "Hello World",
-        "selftext": "This is a test post about AI.",
+        "title": "The AGI prophecy",
+        "selftext": "Some believe AGI will be a divine creation.",
         "comments": [
             {
                 "id": "c1",
                 "author": "bob",
                 "created_utc": 1700000001,
-                "body": "AI is great.",
+                "body": "AGI could be the supreme intelligence.",
             },
             {
                 "id": "c2",
                 "author": "eve",
                 "created_utc": 1700000002,
-                "body": "Nothing to see.",
+                "body": "Nothing to see here.",
             },
         ],
     }
 
 
 @pytest.fixture
-def rules_csv(tmp_dir: Path) -> Path:
-    """Create a simple rules CSV file."""
-    p = tmp_dir / "rules.csv"
-    p.write_text("keyword\nAI\ntest\n", encoding="utf-8")
-    return p
+def rules_csv() -> Path:
+    """Path to the demo coding_rules.csv."""
+    return DEMO_RULES_CSV
 
 
 @pytest.fixture
@@ -158,7 +157,10 @@ class TestCsvDialect:
 class TestLoadKeywordsCsv:
     def test_basic_load(self, rules_csv: Path) -> None:
         kws = trc.load_keywords_csv(rules_csv, case_sensitive=False)
-        assert kws == ["AI", "test"]
+        assert len(kws) == 48
+        assert kws[0] == "god"
+        assert "AGI" in kws
+        assert "divine" in kws
 
     def test_deduplication_case_insensitive(self, tmp_dir: Path) -> None:
         p = tmp_dir / "dup.csv"
@@ -338,6 +340,10 @@ class TestExtractSubreddit:
         d = {"url": "/r/singularity/comments/abc/title/"}
         assert trc.extract_subreddit(d, "f", "$") == "singularity"
 
+    def test_from_url_no_trailing_slash(self) -> None:
+        d = {"url": "/r/python"}
+        assert trc.extract_subreddit(d, "f", "$") == "python"
+
     def test_prefixed(self) -> None:
         d = {"subreddit_name_prefixed": "r/python"}
         assert trc.extract_subreddit(d, "f", "$") == "python"
@@ -361,22 +367,19 @@ class TestExtractPostId:
             {"id": "t3_abc"}, "f", "$", "fallback"
         ) == "abc"
 
-    def test_from_url_with_non_string_id(self) -> None:
-        # URL regex only triggers when normalize_fullname returns ""
-        # (i.e. value is non-string); URL as sole field returns URL as-is
-        d = {"id": 123, "url": "/r/sub/comments/xyz/some_title/"}
-        # id=123 is non-string → normalize_fullname returns "" → falls
-        # through to url which also goes through normalize_fullname
-        # returning URL as-is. So test that URL-only returns the URL.
-        d2 = {"url": "/r/sub/comments/xyz/some_title/"}
-        result = trc.extract_post_id(d2, "f", "$", "fallback")
-        assert result == "/r/sub/comments/xyz/some_title/"
+    def test_from_url(self) -> None:
+        d = {"url": "/r/sub/comments/xyz/some_title/"}
+        assert trc.extract_post_id(d, "f", "$", "fallback") == "xyz"
 
     def test_from_permalink(self) -> None:
-        # When id field is missing and permalink is present
         d = {"permalink": "/r/sub/comments/xyz/some_title/"}
-        result = trc.extract_post_id(d, "f", "$", "fallback")
-        assert result == "/r/sub/comments/xyz/some_title/"
+        assert trc.extract_post_id(d, "f", "$", "fallback") == "xyz"
+
+    def test_url_without_comments_pattern(self) -> None:
+        d = {"url": "/r/sub/some_page/"}
+        assert trc.extract_post_id(
+            d, "f", "$", "fallback"
+        ) == "fallback"
 
     def test_fallback(self) -> None:
         assert trc.extract_post_id({}, "f", "$", "fallback") == "fallback"
@@ -547,7 +550,7 @@ class TestFindPostAndComments:
     ) -> None:
         post, comments = trc.find_post_and_comments(sample_post)
         assert post is not None
-        assert post[0]["title"] == "Hello World"
+        assert post[0]["title"] == "The AGI prophecy"
         assert len(comments) >= 2
 
     def test_no_post(self) -> None:
@@ -709,9 +712,9 @@ class TestProcessFile:
         assert posts == 1
         assert comments == 2
         assert len(rows) > 0
-        # "AI" should match in post and first comment
-        ai_rows = [r for r in rows if r["keyword"] == "AI"]
-        assert len(ai_rows) >= 2
+        # "AGI" should match in post and first comment
+        agi_rows = [r for r in rows if r["keyword"] == "AGI"]
+        assert len(agi_rows) >= 2
 
     def test_missing_file(self, tmp_dir: Path) -> None:
         chunks = _make_regex_chunks(["AI"])
@@ -886,13 +889,14 @@ class TestRun:
         (data_dir / "post.json").write_text(
             json.dumps(sample_post), encoding="utf-8"
         )
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         out_tagged = tmp_dir / "tagged.csv"
         out_phrases = tmp_dir / "phrases.csv"
 
         args = self._make_args(
-            str(data_dir), str(rules), str(out_tagged), str(out_phrases)
+            str(data_dir),
+            str(DEMO_RULES_CSV),
+            str(out_tagged),
+            str(out_phrases),
         )
         code = trc.run(args)
         assert code == 0
@@ -906,11 +910,9 @@ class TestRun:
         assert len(rows) >= 2  # post + at least 1 comment
 
     def test_missing_data_dir(self, tmp_dir: Path) -> None:
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         args = self._make_args(
             str(tmp_dir / "missing"),
-            str(rules),
+            str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
             str(tmp_dir / "p.csv"),
         )
@@ -919,11 +921,9 @@ class TestRun:
     def test_no_json_files(self, tmp_dir: Path) -> None:
         data_dir = tmp_dir / "empty_data"
         data_dir.mkdir()
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         args = self._make_args(
             str(data_dir),
-            str(rules),
+            str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
             str(tmp_dir / "p.csv"),
         )
@@ -933,11 +933,9 @@ class TestRun:
         data_dir = tmp_dir / "data"
         data_dir.mkdir()
         (data_dir / "x.json").write_text("{}", encoding="utf-8")
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         args = self._make_args(
             str(data_dir),
-            str(rules),
+            str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
             str(tmp_dir / "p.csv"),
             threads=0,
@@ -957,14 +955,12 @@ class TestRun:
         (data_dir / "b.json").write_text(
             json.dumps(sample_post), encoding="utf-8"
         )
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         out_tagged = tmp_dir / "tagged.csv"
         out_phrases = tmp_dir / "phrases.csv"
 
         args = self._make_args(
             str(data_dir),
-            str(rules),
+            str(DEMO_RULES_CSV),
             str(out_tagged),
             str(out_phrases),
             threads=2,
@@ -982,13 +978,11 @@ class TestRun:
         (data_dir / "post.json").write_text(
             json.dumps(sample_post), encoding="utf-8"
         )
-        rules = tmp_dir / "rules.csv"
-        rules.write_text("keyword\nAI\n", encoding="utf-8")
         out_dir = tmp_dir / "output"
 
         args = self._make_args(
             str(data_dir),
-            str(rules),
+            str(DEMO_RULES_CSV),
             None,  # out_tagged
             None,  # out_phrases
             output_dir=str(out_dir),

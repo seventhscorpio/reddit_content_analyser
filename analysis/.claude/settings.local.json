@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python -m pytest test/test_tag_reddit_content.py -v)",
-      "Bash(pip install pytest)"
+      "Bash(pip install pytest)",
+      "Bash(python tag_reddit_content.py --self-test)"
     ]
   }
 }

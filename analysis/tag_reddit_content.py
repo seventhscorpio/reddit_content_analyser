@@ -209,15 +209,23 @@ def get_string_field(
     return str(value)
 
 
-def extract_subreddit(d: Dict[str, Any], file_name: str, json_path: str) -> str:
+def extract_subreddit(
+    d: Dict[str, Any], file_name: str, json_path: str
+) -> str:
     """Extract subreddit name from fields or URL/permalink."""
-    value, _ = get_value(d, ["subreddit", "subreddit_name_prefixed", "community", "url", "permalink"])
+    value, _ = get_value(
+        d,
+        ["subreddit", "subreddit_name_prefixed",
+         "community", "url", "permalink"],
+    )
     if value is None:
-        LOG.warning("Missing subreddit in %s at %s", file_name, json_path)
+        LOG.warning(
+            "Missing subreddit in %s at %s", file_name, json_path
+        )
         return ""
     if isinstance(value, str):
         if "/r/" in value:
-            m = re.search(r"/r/([^/]+)/", value)
+            m = re.search(r"/r/([^/]+)(?:/|$)", value)
             if m:
                 return m.group(1)
         if value.startswith("r/"):
@@ -226,16 +234,28 @@ def extract_subreddit(d: Dict[str, Any], file_name: str, json_path: str) -> str:
     return str(value)
 
 
-def extract_post_id(d: Dict[str, Any], file_name: str, json_path: str, fallback: str) -> str:
+def extract_post_id(
+    d: Dict[str, Any],
+    file_name: str,
+    json_path: str,
+    fallback: str,
+) -> str:
     """Extract post id from fields or URL/permalink, with fallback."""
-    value, _ = get_value(d, ["id", "post_id", "name", "full_id", "link_id", "url", "permalink"])
+    id_keys = ["id", "post_id", "name", "full_id", "link_id"]
+    value, _ = get_value(d, id_keys)
     post_id = normalize_fullname(value)
-    if not post_id and isinstance(value, str):
-        m = re.search(r"/comments/([^/]+)/", value)
-        if m:
-            post_id = m.group(1)
     if not post_id:
-        LOG.warning("Missing post_id in %s at %s; using file stem", file_name, json_path)
+        url_value, _ = get_value(d, ["url", "permalink"])
+        if isinstance(url_value, str):
+            m = re.search(r"/comments/([^/]+)/", url_value)
+            if m:
+                post_id = m.group(1)
+    if not post_id:
+        LOG.warning(
+            "Missing post_id in %s at %s; using file stem",
+            file_name,
+            json_path,
+        )
         return fallback
     return post_id
 
@@ -256,8 +276,8 @@ def extract_comment_id(
 
 def extract_likes_dislikes(d: Dict[str, Any]) -> Tuple[str, str, str]:
     """Extract likes/dislikes/unvoted from score-like fields."""
-    if isinstance(d.get("score"), dict):
-        score = d.get("score") or {}
+    score = d.get("score")
+    if isinstance(score, dict):
         likes = score.get("likes")
         dislikes = score.get("dislikes")
         unvoted = score.get("unvoted")
@@ -369,7 +389,12 @@ def score_comment(d: Dict[str, Any], kind_hint: Optional[str]) -> int:
     return score
 
 
-def find_post_and_comments(obj: Any) -> Tuple[Optional[Tuple[Dict[str, Any], str]], List[Tuple[Dict[str, Any], str]]]:
+def find_post_and_comments(
+    obj: Any,
+) -> Tuple[
+    Optional[Tuple[Dict[str, Any], str]],
+    List[Tuple[Dict[str, Any], str]],
+]:
     """Select the best post candidate and collect comment candidates."""
     candidates: List[Tuple[int, Dict[str, Any], str]] = []
     comments: List[Tuple[Dict[str, Any], str]] = []
@@ -471,7 +496,7 @@ def process_file(
     tagged_rows: List[Dict[str, str]] = []
     keyword_hits: Dict[int, Tuple[Set[str], Set[str]]] = {}
 
-    def record_hit(kw_id: int, kw: str, content_id: str) -> None:
+    def record_hit(kw_id: int, content_id: str) -> None:
         if kw_id not in keyword_hits:
             keyword_hits[kw_id] = (set(), set())
         keyword_hits[kw_id][0].add(root_post_id)
@@ -494,9 +519,12 @@ def process_file(
         )
         created_raw, created_key = get_value(
             post_node,
-            ["created_utc", "created", "created_at", "createdAt", "date", "timestamp", "published"],
+            ["created_utc", "created", "created_at",
+             "createdAt", "date", "timestamp", "published"],
         )
-        created_at = to_iso_utc(created_raw, path.name, post_path, created_key)
+        created_at = to_iso_utc(
+            created_raw, path.name, post_path, created_key
+        )
         likes, dislikes, unvoted = extract_likes_dislikes(post_node)
         text = post_text(post_node, path.name, post_path)
         matches = find_keyword_matches(text, regex_chunks)
@@ -517,13 +545,15 @@ def process_file(
                     "keyword": kw,
                 }
             )
-            record_hit(kw_id, kw, content_id)
+            record_hit(kw_id, content_id)
 
     for idx, (comment, cpath) in enumerate(comments, start=1):
         # Tag each comment independently, with fallback ids when missing.
         comment_count += 1
         fallback_id = f"{root_post_id}_comment_{idx}"
-        content_id, used_fallback = extract_comment_id(comment, path.name, cpath, fallback_id)
+        content_id, used_fallback = extract_comment_id(
+            comment, path.name, cpath, fallback_id
+        )
         if used_fallback:
             fallback_comment_ids += 1
         author = get_string_field(
@@ -536,9 +566,13 @@ def process_file(
         )
         created_raw, created_key = get_value(
             comment,
-            ["created_utc", "created", "created_at", "createdAt", "date", "timestamp", "published"],
+            ["created_utc", "created", "created_at",
+             "createdAt", "date", "timestamp", "published"],
         )
-        created_at = to_iso_utc(created_raw, path.name, cpath, created_key, suppress_missing=True)
+        created_at = to_iso_utc(
+            created_raw, path.name, cpath, created_key,
+            suppress_missing=True,
+        )
         likes, dislikes, unvoted = extract_likes_dislikes(comment)
         text = comment_text(comment, path.name, cpath)
         matches = find_keyword_matches(text, regex_chunks)
@@ -559,7 +593,7 @@ def process_file(
                     "keyword": kw,
                 }
             )
-            record_hit(kw_id, kw, content_id)
+            record_hit(kw_id, content_id)
 
     return True, post_count, comment_count, fallback_comment_ids, tagged_rows, keyword_hits
 
