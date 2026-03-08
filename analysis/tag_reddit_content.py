@@ -868,7 +868,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def run_self_test() -> int:
-    """Run a minimal self-test with synthetic data."""
+    """Run a self-test with synthetic data and output validation."""
     LOG.info("Running self-test...")
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -907,8 +907,103 @@ def run_self_test() -> int:
             threads=1,
         )
         code = run(args)
+        if code != 0:
+            LOG.error("Self-test pipeline failed with code %d", code)
+            return code
+
+        for output_path in (out_tagged, out_phrases, out_xlsx):
+            if not output_path.exists():
+                LOG.error("Self-test missing output: %s", output_path)
+                return 1
+
+        with out_tagged.open("r", encoding="utf-8", newline="") as f:
+            tagged_rows = list(csv.DictReader(f))
+        if len(tagged_rows) < 2:
+            LOG.error(
+                "Self-test expected at least 2 tagged rows, got %d",
+                len(tagged_rows),
+            )
+            return 1
+        if not any(row.get("keyword") == "AI" for row in tagged_rows):
+            LOG.error("Self-test expected keyword 'AI' in tagged_content.csv")
+            return 1
+
+        with out_phrases.open("r", encoding="utf-8", newline="") as f:
+            phrases_rows = list(csv.DictReader(f))
+        ai_rows = [row for row in phrases_rows if row.get("keyword") == "AI"]
+        if not ai_rows:
+            LOG.error("Self-test expected keyword 'AI' in phrases_found.csv")
+            return 1
+        ai_row = ai_rows[0]
+        if ai_row.get("tagged_post_count") != "1":
+            LOG.error(
+                "Self-test expected AI tagged_post_count=1, got %s",
+                ai_row.get("tagged_post_count"),
+            )
+            return 1
+        if ai_row.get("tagged_content_count") != "2":
+            LOG.error(
+                "Self-test expected AI tagged_content_count=2, got %s",
+                ai_row.get("tagged_content_count"),
+            )
+            return 1
+
+        try:
+            import pandas as pd  # type: ignore
+        except Exception as exc:
+            LOG.error(
+                "Self-test failed importing pandas for XLSX validation: %s",
+                exc,
+            )
+            return 1
+
+        sheets = set(pd.ExcelFile(out_xlsx).sheet_names)
+        required_sheets = {
+            "tagged_content",
+            "phrases_found",
+            "coding_rules",
+            "metadata",
+        }
+        missing_sheets = sorted(required_sheets - sheets)
+        if missing_sheets:
+            LOG.error(
+                "Self-test missing XLSX sheets: %s",
+                ", ".join(missing_sheets),
+            )
+            return 1
+
+        metadata_df = pd.read_excel(out_xlsx, sheet_name="metadata")
+        if list(metadata_df.columns) != ["key", "value"]:
+            LOG.error(
+                "Self-test expected metadata columns ['key', 'value'], got %s",
+                list(metadata_df.columns),
+            )
+            return 1
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for _, row in metadata_df.iterrows()
+        }
+        for key in ("command", "working_directory", "run_timestamp"):
+            if not metadata.get(key):
+                LOG.error("Self-test metadata key missing or empty: %s", key)
+                return 1
+        try:
+            run_dt = datetime.fromisoformat(metadata["run_timestamp"])
+        except ValueError:
+            LOG.error(
+                "Self-test run_timestamp is not valid ISO format: %s",
+                metadata["run_timestamp"],
+            )
+            return 1
+        if run_dt.tzinfo is None:
+            LOG.error(
+                "Self-test run_timestamp missing timezone: %s",
+                metadata["run_timestamp"],
+            )
+            return 1
+
         LOG.info("Self-test outputs: %s, %s", out_tagged, out_phrases)
-        return code
+        return 0
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
