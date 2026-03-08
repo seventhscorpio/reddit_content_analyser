@@ -859,10 +859,11 @@ class TestWriteCsv:
 class TestRun:
     def _make_args(
         self,
+        tmp_dir: Path,
         data_dir: str,
         rules: str,
-        out_tagged: str,
-        out_phrases: str,
+        out_tagged: str | None = None,
+        out_phrases: str | None = None,
         **kwargs: Any,
     ) -> argparse.Namespace:
         defaults = {
@@ -870,7 +871,7 @@ class TestRun:
             "rules": rules,
             "out_tagged": out_tagged,
             "out_phrases": out_phrases,
-            "out_xlsx": None,
+            "out_xlsx": str(tmp_dir / "results.xlsx"),
             "output_dir": None,
             "case_sensitive": False,
             "whole_word": False,
@@ -893,6 +894,7 @@ class TestRun:
         out_phrases = tmp_dir / "phrases.csv"
 
         args = self._make_args(
+            tmp_dir,
             str(data_dir),
             str(DEMO_RULES_CSV),
             str(out_tagged),
@@ -902,6 +904,8 @@ class TestRun:
         assert code == 0
         assert out_tagged.exists()
         assert out_phrases.exists()
+        xlsx_path = tmp_dir / "results.xlsx"
+        assert xlsx_path.exists()
 
         # Verify tagged CSV content
         with out_tagged.open("r", encoding="utf-8") as f:
@@ -909,8 +913,19 @@ class TestRun:
             rows = list(reader)
         assert len(rows) >= 2  # post + at least 1 comment
 
+        # Verify XLSX sheets
+        import pandas as pd  # type: ignore
+        sheets = pd.ExcelFile(xlsx_path).sheet_names
+        assert "tagged_content" in sheets
+        assert "phrases_found" in sheets
+        assert "coding_rules" in sheets
+        rules_df = pd.read_excel(xlsx_path, sheet_name="coding_rules")
+        assert "keyword" in rules_df.columns
+        assert len(rules_df) == 48
+
     def test_missing_data_dir(self, tmp_dir: Path) -> None:
         args = self._make_args(
+            tmp_dir,
             str(tmp_dir / "missing"),
             str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
@@ -922,6 +937,7 @@ class TestRun:
         data_dir = tmp_dir / "empty_data"
         data_dir.mkdir()
         args = self._make_args(
+            tmp_dir,
             str(data_dir),
             str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
@@ -934,6 +950,7 @@ class TestRun:
         data_dir.mkdir()
         (data_dir / "x.json").write_text("{}", encoding="utf-8")
         args = self._make_args(
+            tmp_dir,
             str(data_dir),
             str(DEMO_RULES_CSV),
             str(tmp_dir / "t.csv"),
@@ -959,6 +976,7 @@ class TestRun:
         out_phrases = tmp_dir / "phrases.csv"
 
         args = self._make_args(
+            tmp_dir,
             str(data_dir),
             str(DEMO_RULES_CSV),
             str(out_tagged),
@@ -981,16 +999,17 @@ class TestRun:
         out_dir = tmp_dir / "output"
 
         args = self._make_args(
+            tmp_dir,
             str(data_dir),
             str(DEMO_RULES_CSV),
-            None,  # out_tagged
-            None,  # out_phrases
+            out_xlsx=None,
             output_dir=str(out_dir),
         )
         code = trc.run(args)
         assert code == 0
         assert (out_dir / "tagged_content.csv").exists()
         assert (out_dir / "phrases_found.csv").exists()
+        assert (out_dir / "results.xlsx").exists()
 
 
 # ---------------------------------------------------------------------------

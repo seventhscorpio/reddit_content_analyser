@@ -638,18 +638,33 @@ def write_phrases_csv(
             writer.writerow([idx, kw, post_count, content_count])
 
 
+def _read_rules_csv(rules_path: Path) -> list:
+    """Read the full rules CSV as a list of dicts."""
+    sample_text = rules_path.read_text(
+        encoding="utf-8-sig", errors="replace"
+    )
+    sample_lines = "\n".join(sample_text.splitlines()[:5])
+    dialect = _detect_csv_dialect(sample_lines)
+    with rules_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f, dialect=dialect)
+        return list(reader)
+
+
 def write_xlsx(
     path: Path,
     tagged_rows: List[Dict[str, str]],
     keywords: List[str],
     keyword_posts: Dict[int, Set[str]],
     keyword_contents: Dict[int, Set[str]],
+    rules_path: Path,
 ) -> None:
-    """Write tagged content and phrases to a single XLSX workbook."""
+    """Write tagged content, phrases, and coding rules to XLSX."""
     try:
         import pandas as pd  # type: ignore
     except Exception as exc:
-        raise RuntimeError("pandas is required to write XLSX output.") from exc
+        raise RuntimeError(
+            "pandas is required to write XLSX output."
+        ) from exc
 
     phrases_rows: List[Dict[str, Any]] = []
     for idx, kw in enumerate(keywords, start=1):
@@ -657,15 +672,28 @@ def write_xlsx(
             {
                 "id": idx,
                 "keyword": kw,
-                "tagged_post_count": len(keyword_posts.get(idx, set())),
-                "tagged_content_count": len(keyword_contents.get(idx, set())),
+                "tagged_post_count": len(
+                    keyword_posts.get(idx, set())
+                ),
+                "tagged_content_count": len(
+                    keyword_contents.get(idx, set())
+                ),
             }
         )
 
+    rules_rows = _read_rules_csv(rules_path)
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(path) as writer:
-        pd.DataFrame(tagged_rows).to_excel(writer, sheet_name="tagged_content", index=False)
-        pd.DataFrame(phrases_rows).to_excel(writer, sheet_name="phrases_found", index=False)
+        pd.DataFrame(tagged_rows).to_excel(
+            writer, sheet_name="tagged_content", index=False
+        )
+        pd.DataFrame(phrases_rows).to_excel(
+            writer, sheet_name="phrases_found", index=False
+        )
+        pd.DataFrame(rules_rows).to_excel(
+            writer, sheet_name="coding_rules", index=False
+        )
 
 
 def resolve_default_data_dir() -> Path:
@@ -687,7 +715,10 @@ def run(args: argparse.Namespace) -> int:
         (output_dir / "phrases_found.csv") if output_dir else Path("phrases_found.csv")
     )
     out_xlsx_value = getattr(args, "out_xlsx", None)
-    out_xlsx = Path(out_xlsx_value) if out_xlsx_value else None
+    out_xlsx = Path(out_xlsx_value) if out_xlsx_value else (
+        (output_dir / "results.xlsx") if output_dir
+        else Path("results.xlsx")
+    )
 
     LOG.info("Data directory: %s", data_dir)
     if not data_dir.is_dir():
@@ -752,13 +783,16 @@ def run(args: argparse.Namespace) -> int:
 
     write_tagged_csv(out_tagged, all_rows)
     write_phrases_csv(out_phrases, keywords, keyword_posts, keyword_contents)
-    if out_xlsx:
-        try:
-            write_xlsx(out_xlsx, all_rows, keywords, keyword_posts, keyword_contents)
-            LOG.info("XLSX written: %s", out_xlsx)
-        except Exception as exc:
-            LOG.error("Failed to write XLSX: %s", exc)
-            return 1
+    try:
+        write_xlsx(
+            out_xlsx, all_rows, keywords,
+            keyword_posts, keyword_contents,
+            rules_path,
+        )
+        LOG.info("XLSX written: %s", out_xlsx)
+    except Exception as exc:
+        LOG.error("Failed to write XLSX: %s", exc)
+        return 1
 
     found_phrases = sum(1 for idx in range(1, len(keywords) + 1) if keyword_posts.get(idx))
 
@@ -782,6 +816,7 @@ def run_self_test() -> int:
         rules_path = base / "coding_rules.csv"
         out_tagged = base / "tagged_content.csv"
         out_phrases = base / "phrases_found.csv"
+        out_xlsx = base / "results.xlsx"
 
         sample = {
             "id": "abc123",
@@ -803,7 +838,7 @@ def run_self_test() -> int:
             rules=str(rules_path),
             out_tagged=str(out_tagged),
             out_phrases=str(out_phrases),
-            out_xlsx=None,
+            out_xlsx=str(out_xlsx),
             case_sensitive=False,
             whole_word=False,
             threads=1,
@@ -850,7 +885,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--out-xlsx",
-        help="Optional XLSX output containing tagged_content and phrases_found sheets.",
+        default=None,
+        help=(
+            "Output XLSX path. Default: results.xlsx "
+            "(or <output-dir>/results.xlsx when --output-dir "
+            "is set)."
+        ),
     )
     parser.add_argument("--case-sensitive", action="store_true", help="Use case-sensitive matching.")
     parser.add_argument("--whole-word", action="store_true", help="Respect word boundaries.")
