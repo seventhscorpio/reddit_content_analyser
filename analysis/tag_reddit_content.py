@@ -721,12 +721,6 @@ def format_command_line(argv: List[str]) -> str:
         return " ".join(argv)
 
 
-def resolve_default_data_dir() -> Path:
-    """Resolve default data directory relative to this script."""
-    # Default relative to this script's location: ..\Data\Demo data
-    return (Path(__file__).parent / ".." / "Data" / "Demo data").resolve()
-
-
 def with_timestamp_affix(
     path: Path,
     timestamp: str,
@@ -745,7 +739,7 @@ def with_timestamp_affix(
 
 def run(args: argparse.Namespace) -> int:
     """Main processing pipeline."""
-    data_dir = Path(args.data_dir).resolve() if args.data_dir else resolve_default_data_dir()
+    data_dir = Path(args.data_dir).resolve()
     rules_path = Path(args.rules)
     run_metadata = {
         "command": format_command_line(sys.argv),
@@ -924,8 +918,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-dir",
-        default=None,
-        help="Directory with JSON files (default: ..\\Data\\Demo data relative to script).",
+        required=True,
+        help="Directory with JSON files.",
     )
     parser.add_argument("--rules", required=True, help="Path to coding_rules.csv.")
     parser.add_argument(

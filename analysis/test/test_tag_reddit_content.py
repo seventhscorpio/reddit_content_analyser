@@ -1154,10 +1154,16 @@ class TestBuildArgParser:
         with pytest.raises(SystemExit):
             parser.parse_args([])
 
+    def test_required_data_dir(self) -> None:
+        parser = trc.build_arg_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--rules", "rules.csv"])
+
     def test_minimal_args(self) -> None:
         parser = trc.build_arg_parser()
-        args = parser.parse_args(["--rules", "rules.csv"])
+        args = parser.parse_args(["--rules", "rules.csv", "--data-dir", "/data"])
         assert args.rules == "rules.csv"
+        assert args.data_dir == "/data"
         assert args.add_timestamp_prefix is False
         assert args.add_timestamp_suffix is False
         assert args.threads == 1
