@@ -1,0 +1,5 @@
+test/demo_data/*
+test/out/*
+test/__pycache__/*
+.pytest_cache/*
+__pycache__/*
