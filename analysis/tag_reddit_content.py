@@ -702,6 +702,22 @@ def resolve_default_data_dir() -> Path:
     return (Path(__file__).parent / ".." / "Data" / "Demo data").resolve()
 
 
+def with_timestamp_affix(
+    path: Path,
+    timestamp: str,
+    add_prefix: bool,
+    add_suffix: bool,
+) -> Path:
+    """Return a path whose filename includes a timestamp prefix or suffix."""
+    if add_prefix and add_suffix:
+        raise ValueError("Timestamp prefix and suffix are mutually exclusive.")
+    if add_prefix:
+        return path.with_name(f"{timestamp}_{path.name}")
+    if add_suffix:
+        return path.with_name(f"{path.stem}_{timestamp}{path.suffix}")
+    return path
+
+
 def run(args: argparse.Namespace) -> int:
     """Main processing pipeline."""
     data_dir = Path(args.data_dir).resolve() if args.data_dir else resolve_default_data_dir()
@@ -719,6 +735,24 @@ def run(args: argparse.Namespace) -> int:
         (output_dir / "results.xlsx") if output_dir
         else Path("results.xlsx")
     )
+    add_timestamp_prefix = bool(getattr(args, "add_timestamp_prefix", False))
+    add_timestamp_suffix = bool(getattr(args, "add_timestamp_suffix", False))
+    if add_timestamp_prefix and add_timestamp_suffix:
+        LOG.error(
+            "--add-timestamp-prefix and --add-timestamp-suffix are mutually exclusive."
+        )
+        return 1
+    if add_timestamp_prefix or add_timestamp_suffix:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        out_tagged = with_timestamp_affix(
+            out_tagged, timestamp, add_timestamp_prefix, add_timestamp_suffix
+        )
+        out_phrases = with_timestamp_affix(
+            out_phrases, timestamp, add_timestamp_prefix, add_timestamp_suffix
+        )
+        out_xlsx = with_timestamp_affix(
+            out_xlsx, timestamp, add_timestamp_prefix, add_timestamp_suffix
+        )
 
     LOG.info("Data directory: %s", data_dir)
     if not data_dir.is_dir():
@@ -782,7 +816,9 @@ def run(args: argparse.Namespace) -> int:
                     keyword_contents.setdefault(kw_id, set()).update(content_ids)
 
     write_tagged_csv(out_tagged, all_rows)
+    LOG.info("Tagged CSV written: %s", out_tagged)
     write_phrases_csv(out_phrases, keywords, keyword_posts, keyword_contents)
+    LOG.info("Phrases CSV written: %s", out_phrases)
     try:
         write_xlsx(
             out_xlsx, all_rows, keywords,
@@ -839,6 +875,8 @@ def run_self_test() -> int:
             out_tagged=str(out_tagged),
             out_phrases=str(out_phrases),
             out_xlsx=str(out_xlsx),
+            add_timestamp_prefix=False,
+            add_timestamp_suffix=False,
             case_sensitive=False,
             whole_word=False,
             threads=1,
@@ -890,6 +928,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "Output XLSX path. Default: results.xlsx "
             "(or <output-dir>/results.xlsx when --output-dir "
             "is set)."
+        ),
+    )
+    timestamp_group = parser.add_mutually_exclusive_group()
+    timestamp_group.add_argument(
+        "--add-timestamp-prefix",
+        action="store_true",
+        help=(
+            "Prefix output filenames with current timestamp: "
+            "YYYYMMDD-HHMMSS_filename.ext."
+        ),
+    )
+    timestamp_group.add_argument(
+        "--add-timestamp-suffix",
+        action="store_true",
+        help=(
+            "Suffix output filenames with current timestamp: "
+            "filename_YYYYMMDD-HHMMSS.ext."
         ),
     )
     parser.add_argument("--case-sensitive", action="store_true", help="Use case-sensitive matching.")

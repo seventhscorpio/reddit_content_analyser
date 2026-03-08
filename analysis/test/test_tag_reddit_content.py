@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -873,6 +875,8 @@ class TestRun:
             "out_phrases": out_phrases,
             "out_xlsx": str(tmp_dir / "results.xlsx"),
             "output_dir": None,
+            "add_timestamp_prefix": False,
+            "add_timestamp_suffix": False,
             "case_sensitive": False,
             "whole_word": False,
             "threads": 1,
@@ -922,6 +926,49 @@ class TestRun:
         rules_df = pd.read_excel(xlsx_path, sheet_name="coding_rules")
         assert "keyword" in rules_df.columns
         assert len(rules_df) == 48
+
+    def test_logs_output_file_paths(
+        self,
+        tmp_dir: Path,
+        sample_post: Dict[str, Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        data_dir = tmp_dir / "data"
+        data_dir.mkdir()
+        (data_dir / "post.json").write_text(
+            json.dumps(sample_post), encoding="utf-8"
+        )
+        out_tagged = tmp_dir / "tagged.csv"
+        out_phrases = tmp_dir / "phrases.csv"
+        out_xlsx = tmp_dir / "results.xlsx"
+
+        args = self._make_args(
+            tmp_dir,
+            str(data_dir),
+            str(DEMO_RULES_CSV),
+            str(out_tagged),
+            str(out_phrases),
+            out_xlsx=str(out_xlsx),
+        )
+        caplog.set_level(logging.INFO, logger=trc.LOG.name)
+
+        code = trc.run(args)
+        assert code == 0
+
+        info_messages = [
+            rec.getMessage()
+            for rec in caplog.records
+            if rec.levelno == logging.INFO
+        ]
+        assert any(
+            msg == f"Tagged CSV written: {out_tagged}" for msg in info_messages
+        )
+        assert any(
+            msg == f"Phrases CSV written: {out_phrases}" for msg in info_messages
+        )
+        assert any(
+            msg == f"XLSX written: {out_xlsx}" for msg in info_messages
+        )
 
     def test_missing_data_dir(self, tmp_dir: Path) -> None:
         args = self._make_args(
@@ -1011,6 +1058,77 @@ class TestRun:
         assert (out_dir / "phrases_found.csv").exists()
         assert (out_dir / "results.xlsx").exists()
 
+    def test_output_dir_with_timestamp_prefix(
+        self,
+        tmp_dir: Path,
+        sample_post: Dict[str, Any],
+    ) -> None:
+        data_dir = tmp_dir / "data"
+        data_dir.mkdir()
+        (data_dir / "post.json").write_text(
+            json.dumps(sample_post), encoding="utf-8"
+        )
+        out_dir = tmp_dir / "output"
+
+        args = self._make_args(
+            tmp_dir,
+            str(data_dir),
+            str(DEMO_RULES_CSV),
+            out_xlsx=None,
+            output_dir=str(out_dir),
+            add_timestamp_prefix=True,
+        )
+        code = trc.run(args)
+        assert code == 0
+
+        tagged = [p.name for p in out_dir.glob("*_tagged_content.csv")]
+        assert len(tagged) == 1
+        match = re.fullmatch(r"(\d{8}-\d{6})_tagged_content\.csv", tagged[0])
+        assert match is not None
+        timestamp = match.group(1)
+        assert (out_dir / f"{timestamp}_phrases_found.csv").exists()
+        assert (out_dir / f"{timestamp}_results.xlsx").exists()
+        assert not (out_dir / "tagged_content.csv").exists()
+        assert not (out_dir / "phrases_found.csv").exists()
+        assert not (out_dir / "results.xlsx").exists()
+
+    def test_custom_output_paths_with_timestamp_suffix(
+        self,
+        tmp_dir: Path,
+        sample_post: Dict[str, Any],
+    ) -> None:
+        data_dir = tmp_dir / "data"
+        data_dir.mkdir()
+        (data_dir / "post.json").write_text(
+            json.dumps(sample_post), encoding="utf-8"
+        )
+        out_tagged = tmp_dir / "custom_tagged.csv"
+        out_phrases = tmp_dir / "custom_phrases.csv"
+        out_xlsx = tmp_dir / "custom_results.xlsx"
+
+        args = self._make_args(
+            tmp_dir,
+            str(data_dir),
+            str(DEMO_RULES_CSV),
+            str(out_tagged),
+            str(out_phrases),
+            out_xlsx=str(out_xlsx),
+            add_timestamp_suffix=True,
+        )
+        code = trc.run(args)
+        assert code == 0
+
+        tagged = [p.name for p in tmp_dir.glob("custom_tagged_*.csv")]
+        assert len(tagged) == 1
+        match = re.fullmatch(r"custom_tagged_(\d{8}-\d{6})\.csv", tagged[0])
+        assert match is not None
+        timestamp = match.group(1)
+        assert (tmp_dir / f"custom_phrases_{timestamp}.csv").exists()
+        assert (tmp_dir / f"custom_results_{timestamp}.xlsx").exists()
+        assert not out_tagged.exists()
+        assert not out_phrases.exists()
+        assert not out_xlsx.exists()
+
 
 # ---------------------------------------------------------------------------
 # build_arg_parser
@@ -1026,6 +1144,8 @@ class TestBuildArgParser:
         parser = trc.build_arg_parser()
         args = parser.parse_args(["--rules", "rules.csv"])
         assert args.rules == "rules.csv"
+        assert args.add_timestamp_prefix is False
+        assert args.add_timestamp_suffix is False
         assert args.threads == 1
         assert args.case_sensitive is False
         assert args.whole_word is False
@@ -1039,6 +1159,7 @@ class TestBuildArgParser:
             "--out-tagged", "t.csv",
             "--out-phrases", "p.csv",
             "--out-xlsx", "o.xlsx",
+            "--add-timestamp-prefix",
             "--case-sensitive",
             "--whole-word",
             "--threads", "4",
@@ -1048,9 +1169,20 @@ class TestBuildArgParser:
         assert args.out_tagged == "t.csv"
         assert args.out_phrases == "p.csv"
         assert args.out_xlsx == "o.xlsx"
+        assert args.add_timestamp_prefix is True
+        assert args.add_timestamp_suffix is False
         assert args.case_sensitive is True
         assert args.whole_word is True
         assert args.threads == 4
+
+    def test_timestamp_flags_mutually_exclusive(self) -> None:
+        parser = trc.build_arg_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args([
+                "--rules", "r.csv",
+                "--add-timestamp-prefix",
+                "--add-timestamp-suffix",
+            ])
 
 
 # ---------------------------------------------------------------------------
