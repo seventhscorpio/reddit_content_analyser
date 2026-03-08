@@ -957,7 +957,10 @@ def run_self_test() -> int:
             )
             return 1
 
-        sheets = set(pd.ExcelFile(out_xlsx).sheet_names)
+        sheets: set[str] = {
+            str(sheet_name)
+            for sheet_name in pd.ExcelFile(out_xlsx).sheet_names
+        }
         required_sheets = {
             "tagged_content",
             "phrases_found",
