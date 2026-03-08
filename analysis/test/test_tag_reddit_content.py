@@ -6,6 +6,7 @@ import csv
 import json
 import logging
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Set
 
@@ -923,9 +924,22 @@ class TestRun:
         assert "tagged_content" in sheets
         assert "phrases_found" in sheets
         assert "coding_rules" in sheets
+        assert "metadata" in sheets
         rules_df = pd.read_excel(xlsx_path, sheet_name="coding_rules")
         assert "keyword" in rules_df.columns
         assert len(rules_df) == 48
+        metadata_df = pd.read_excel(xlsx_path, sheet_name="metadata")
+        assert list(metadata_df.columns) == ["key", "value"]
+        metadata = {
+            str(row["key"]): str(row["value"])
+            for _, row in metadata_df.iterrows()
+        }
+        assert "command" in metadata
+        assert metadata["command"]
+        assert metadata["working_directory"] == str(Path.cwd())
+        assert "run_timestamp" in metadata
+        parsed_timestamp = datetime.fromisoformat(metadata["run_timestamp"])
+        assert parsed_timestamp.tzinfo is not None
 
     def test_logs_output_file_paths(
         self,

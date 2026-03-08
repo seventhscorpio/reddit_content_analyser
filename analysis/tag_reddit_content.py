@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -657,8 +658,9 @@ def write_xlsx(
     keyword_posts: Dict[int, Set[str]],
     keyword_contents: Dict[int, Set[str]],
     rules_path: Path,
+    run_metadata: Dict[str, str],
 ) -> None:
-    """Write tagged content, phrases, and coding rules to XLSX."""
+    """Write tagged content, phrases, coding rules, and metadata to XLSX."""
     try:
         import pandas as pd  # type: ignore
     except Exception as exc:
@@ -682,6 +684,14 @@ def write_xlsx(
         )
 
     rules_rows = _read_rules_csv(rules_path)
+    metadata_rows = [
+        {"key": "command", "value": run_metadata.get("command", "")},
+        {
+            "key": "working_directory",
+            "value": run_metadata.get("working_directory", ""),
+        },
+        {"key": "run_timestamp", "value": run_metadata.get("run_timestamp", "")},
+    ]
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(path) as writer:
@@ -694,6 +704,21 @@ def write_xlsx(
         pd.DataFrame(rules_rows).to_excel(
             writer, sheet_name="coding_rules", index=False
         )
+        pd.DataFrame(metadata_rows, columns=["key", "value"]).to_excel(
+            writer, sheet_name="metadata", index=False
+        )
+
+
+def format_command_line(argv: List[str]) -> str:
+    """Render argv as a command line string."""
+    if os.name == "nt":
+        return subprocess.list2cmdline(argv)
+    try:
+        import shlex
+
+        return shlex.join(argv)
+    except Exception:
+        return " ".join(argv)
 
 
 def resolve_default_data_dir() -> Path:
@@ -722,6 +747,11 @@ def run(args: argparse.Namespace) -> int:
     """Main processing pipeline."""
     data_dir = Path(args.data_dir).resolve() if args.data_dir else resolve_default_data_dir()
     rules_path = Path(args.rules)
+    run_metadata = {
+        "command": format_command_line(sys.argv),
+        "working_directory": str(Path.cwd()),
+        "run_timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
     output_dir_value = getattr(args, "output_dir", None)
     output_dir = Path(output_dir_value) if output_dir_value else None
     out_tagged = Path(args.out_tagged) if args.out_tagged else (
@@ -824,6 +854,7 @@ def run(args: argparse.Namespace) -> int:
             out_xlsx, all_rows, keywords,
             keyword_posts, keyword_contents,
             rules_path,
+            run_metadata,
         )
         LOG.info("XLSX written: %s", out_xlsx)
     except Exception as exc:
