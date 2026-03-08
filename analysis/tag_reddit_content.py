@@ -36,12 +36,28 @@ LOG = logging.getLogger(__name__)
 
 
 def setup_logging() -> None:
-    """Configure basic console logging."""
+    """Configure console logging used by the CLI pipeline.
+
+    Workflow role:
+        Called at startup by ``main`` (and self-test mode) so every pipeline
+        stage emits uniform diagnostics.
+    """
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 def read_text_safe(path: Path) -> Optional[str]:
-    """Read text safely, including Windows long-path handling."""
+    """Read UTF-8 text from disk with Windows long-path fallback.
+
+    Workflow role:
+        First IO step for JSON ingestion; isolates filesystem quirks before
+        parsing begins.
+
+    Args:
+        path: File path to read.
+
+    Returns:
+        File contents, or ``None`` when the file is missing or unreadable.
+    """
     try:
         return path.read_text(encoding="utf-8", errors="replace")
     except (FileNotFoundError, OSError):
@@ -61,7 +77,18 @@ def read_text_safe(path: Path) -> Optional[str]:
 
 
 def load_json(path: Path) -> Optional[Any]:
-    """Load JSON with safe text handling and warnings on failure."""
+    """Load JSON from disk while keeping per-file failures non-fatal.
+
+    Workflow role:
+        Entry point for per-file parsing in ``process_file``. Returning ``None``
+        lets batch processing continue when one file is broken.
+
+    Args:
+        path: JSON file path.
+
+    Returns:
+        Parsed JSON value, or ``None`` when reading/parsing fails.
+    """
     text = read_text_safe(path)
     if text is None:
         LOG.warning("Unreadable JSON file: %s", path.name)
@@ -74,7 +101,17 @@ def load_json(path: Path) -> Optional[Any]:
 
 
 def _make_dialect(delimiter: str) -> csv.Dialect:
-    """Create a csv.Dialect instance for a given delimiter."""
+    """Build a CSV dialect instance for delimiter fallback.
+
+    Workflow role:
+        Helper used by rules ingestion when ``csv.Sniffer`` cannot infer format.
+
+    Args:
+        delimiter: Delimiter character to use.
+
+    Returns:
+        Dialect instance compatible with ``csv.reader``.
+    """
     attrs = {
         "delimiter": delimiter,
         "quotechar": '"',
@@ -88,7 +125,17 @@ def _make_dialect(delimiter: str) -> csv.Dialect:
 
 
 def _detect_csv_dialect(sample: str) -> csv.Dialect:
-    """Detect CSV dialect from a sample, with safe fallbacks."""
+    """Detect CSV dialect from a text sample.
+
+    Workflow role:
+        Keeps rules loading resilient to comma/semicolon/tab variants.
+
+    Args:
+        sample: Sample text from the rules file.
+
+    Returns:
+        Detected dialect. Falls back to semicolon/tab/excel heuristics.
+    """
     try:
         return cast(csv.Dialect, csv.Sniffer().sniff(sample, delimiters=",;\t"))
     except csv.Error:
@@ -100,7 +147,24 @@ def _detect_csv_dialect(sample: str) -> csv.Dialect:
 
 
 def load_keywords_csv(path: Path, case_sensitive: bool) -> List[str]:
-    """Load and clean keywords from CSV (dedupe, trim, skip empty)."""
+    """Load cleaned keyword phrases from a rules CSV.
+
+    Workflow role:
+        Produces the canonical keyword list used to compile regex chunks and to
+        preserve stable keyword IDs in outputs.
+
+    Args:
+        path: Path to ``coding_rules.csv``.
+        case_sensitive: Whether duplicate detection is case-sensitive.
+
+    Returns:
+        Ordered list of unique keyword phrases.
+
+    Raises:
+        FileNotFoundError: If the rules file does not exist.
+        ValueError: If the file is empty, missing ``keyword`` column, or has no
+            valid keywords after cleaning.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Rules file not found: {path}")
     sample_text = path.read_text(encoding="utf-8-sig", errors="replace")
@@ -114,6 +178,7 @@ def load_keywords_csv(path: Path, case_sensitive: bool) -> List[str]:
         rows = list(reader)
     if not rows:
         raise ValueError("Rules file is empty.")
+    # Locate the canonical "keyword" column case-insensitively.
     header = rows[0]
     keyword_idx = None
     for idx, name in enumerate(header):
@@ -123,6 +188,7 @@ def load_keywords_csv(path: Path, case_sensitive: bool) -> List[str]:
     if keyword_idx is None:
         raise ValueError('Rules file must contain a "keyword" column.')
 
+    # Preserve file order while deduplicating by matching mode.
     seen: Set[str] = set()
     keywords: List[str] = []
     for row in rows[1:]:
@@ -143,7 +209,18 @@ def load_keywords_csv(path: Path, case_sensitive: bool) -> List[str]:
 
 
 def normalize_fullname(value: Any) -> str:
-    """Normalize Reddit fullname (t1_/t3_) to raw id."""
+    """Convert Reddit fullname values (``t1_``/``t3_``) to raw IDs.
+
+    Workflow role:
+        Shared normalizer for post/comment ID extraction so downstream grouping
+        uses stable identifiers.
+
+    Args:
+        value: Candidate fullname value.
+
+    Returns:
+        Raw identifier when possible, otherwise an empty string or original text.
+    """
     if not isinstance(value, str):
         return ""
     if value.startswith("t1_") or value.startswith("t3_"):
@@ -158,13 +235,29 @@ def to_iso_utc(
     label: str | None = None,
     suppress_missing: bool = False,
 ) -> str:
-    """Convert timestamps to ISO-8601 UTC or pass through strings."""
+    """Convert timestamps to normalized ISO-8601 UTC strings.
+
+    Workflow role:
+        Central timestamp normalizer used when building both post and comment
+        output rows.
+
+    Args:
+        value: Timestamp value (epoch seconds, epoch milliseconds, or text).
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+        label: Matched source field name.
+        suppress_missing: Whether to suppress missing-value warnings.
+
+    Returns:
+        ISO-8601 timestamp string, passthrough text, or an empty string.
+    """
     if value is None:
         if not suppress_missing:
             LOG.warning("Missing created_at in %s at %s", file_name, json_path)
         return ""
     if isinstance(value, (int, float)):
         ts = float(value)
+        # Treat very large epoch values as milliseconds.
         if ts > 1e12:
             ts = ts / 1000.0
         dt = datetime.fromtimestamp(ts, tz=timezone.utc).replace(microsecond=0)
@@ -179,7 +272,18 @@ def to_iso_utc(
 
 
 def get_value(d: Dict[str, Any], keys: Iterable[str]) -> Tuple[Any, Optional[str]]:
-    """Return the first non-null value and its key from a dict."""
+    """Return the first non-null value for candidate keys.
+
+    Workflow role:
+        Core lookup primitive for schema-flexible extraction across the parser.
+
+    Args:
+        d: Source dictionary.
+        keys: Candidate keys in lookup priority order.
+
+    Returns:
+        Tuple of ``(value, key_name)``; ``(None, None)`` if nothing matched.
+    """
     for key in keys:
         if key in d and d[key] is not None:
             return d[key], key
@@ -194,7 +298,23 @@ def get_string_field(
     field_label: str,
     warn_missing: bool = True,
 ) -> str:
-    """Fetch a string field with optional missing-field warning."""
+    """Extract a best-effort string field from flexible JSON structures.
+
+    Workflow role:
+        Normalizes heterogeneous author/title/body field shapes into consistent
+        output-ready strings.
+
+    Args:
+        d: Source dictionary.
+        keys: Candidate keys in lookup priority order.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+        field_label: Human-readable field label for warnings.
+        warn_missing: Whether to log warnings for missing values.
+
+    Returns:
+        Extracted string value, or an empty string if not found.
+    """
     value, key = get_value(d, keys)
     if value is None:
         if warn_missing:
@@ -213,7 +333,20 @@ def get_string_field(
 def extract_subreddit(
     d: Dict[str, Any], file_name: str, json_path: str
 ) -> str:
-    """Extract subreddit name from fields or URL/permalink."""
+    """Extract subreddit name from direct fields or URL-like values.
+
+    Workflow role:
+        Supplies the ``subreddit`` column for tagged output rows, even when the
+        source schema only exposes permalink-like fields.
+
+    Args:
+        d: Source dictionary.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+
+    Returns:
+        Subreddit name or an empty string when unavailable.
+    """
     value, _ = get_value(
         d,
         ["subreddit", "subreddit_name_prefixed",
@@ -241,11 +374,26 @@ def extract_post_id(
     json_path: str,
     fallback: str,
 ) -> str:
-    """Extract post id from fields or URL/permalink, with fallback."""
+    """Extract a stable post ID from fields or Reddit permalink.
+
+    Workflow role:
+        Defines the root identifier used to group all comment matches under one
+        post in both detailed and aggregate outputs.
+
+    Args:
+        d: Source dictionary.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+        fallback: Fallback ID (usually file stem).
+
+    Returns:
+        Post ID string.
+    """
     id_keys = ["id", "post_id", "name", "full_id", "link_id"]
     value, _ = get_value(d, id_keys)
     post_id = normalize_fullname(value)
     if not post_id:
+        # Recover IDs from canonical Reddit comment-thread URLs.
         url_value, _ = get_value(d, ["url", "permalink"])
         if isinstance(url_value, str):
             m = re.search(r"/comments/([^/]+)/", url_value)
@@ -267,7 +415,21 @@ def extract_comment_id(
     json_path: str,
     fallback: str,
 ) -> Tuple[str, bool]:
-    """Extract comment id from fields, returning (id, used_fallback)."""
+    """Extract a comment ID and indicate whether fallback was used.
+
+    Workflow role:
+        Generates stable ``content_id`` values so comment-level matches can be
+        counted and deduplicated reliably.
+
+    Args:
+        d: Source dictionary.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+        fallback: Generated fallback content ID.
+
+    Returns:
+        Tuple of ``(comment_id, used_fallback)``.
+    """
     value, _ = get_value(d, ["id", "comment_id", "name", "full_id"])
     comment_id = normalize_fullname(value)
     if not comment_id:
@@ -276,7 +438,17 @@ def extract_comment_id(
 
 
 def extract_likes_dislikes(d: Dict[str, Any]) -> Tuple[str, str, str]:
-    """Extract likes/dislikes/unvoted from score-like fields."""
+    """Extract vote metrics from heterogeneous score payloads.
+
+    Workflow role:
+        Normalizes score-related fields into consistent output columns.
+
+    Args:
+        d: Source dictionary.
+
+    Returns:
+        Tuple of ``(likes, dislikes, unvoted)`` as strings.
+    """
     score = d.get("score")
     if isinstance(score, dict):
         likes = score.get("likes")
@@ -294,7 +466,19 @@ def extract_likes_dislikes(d: Dict[str, Any]) -> Tuple[str, str, str]:
 
 
 def post_text(d: Dict[str, Any], file_name: str, json_path: str) -> str:
-    """Build post text from title/selftext with safe fallbacks."""
+    """Build searchable post text from title/body fields.
+
+    Workflow role:
+        Creates the exact post text blob scanned by keyword matching.
+
+    Args:
+        d: Post-like dictionary.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+
+    Returns:
+        Combined post text, prioritizing ``title + selftext``.
+    """
     title = get_string_field(d, ["title"], file_name, json_path, "title")
     selftext = get_string_field(
         d,
@@ -316,7 +500,19 @@ def post_text(d: Dict[str, Any], file_name: str, json_path: str) -> str:
 
 
 def comment_text(d: Dict[str, Any], file_name: str, json_path: str) -> str:
-    """Extract comment text from common fields."""
+    """Extract searchable comment text from common body keys.
+
+    Workflow role:
+        Creates the exact comment text blob scanned by keyword matching.
+
+    Args:
+        d: Comment-like dictionary.
+        file_name: Source JSON filename for diagnostics.
+        json_path: JSON path for diagnostics.
+
+    Returns:
+        Comment text, or an empty string when unavailable.
+    """
     body = get_string_field(d, ["body", "text", "comment"], file_name, json_path, "body")
     if not body:
         LOG.warning("Missing comment text in %s at %s", file_name, json_path)
@@ -328,7 +524,20 @@ def collect_nodes(
     path: str = "$",
     seen: Optional[Set[int]] = None,
 ) -> Iterable[Tuple[Dict[str, Any], str, Optional[str]]]:
-    """Walk arbitrary JSON structures and yield dict nodes with paths."""
+    """Traverse JSON and yield dict nodes with path and optional kind hint.
+
+    Workflow role:
+        Structural discovery pass used before scoring to support arbitrary JSON
+        layouts (including nested Reddit listing wrappers).
+
+    Args:
+        obj: Arbitrary JSON-compatible value.
+        path: Current JSON path, used for diagnostics.
+        seen: Set of visited object IDs to avoid recursion cycles.
+
+    Yields:
+        Tuples of ``(node_dict, json_path, kind_hint)``.
+    """
     if seen is None:
         seen = set()
     if isinstance(obj, dict):
@@ -339,6 +548,7 @@ def collect_nodes(
         kind = obj.get("kind")
         data = obj.get("data")
         if kind in ("t1", "t3") and isinstance(data, dict):
+            # Reddit listings often store payload in `{"kind": "...", "data": ...}`.
             yield data, f"{path}.data", kind
             for item in collect_nodes(data, f"{path}.data", seen):
                 yield item
@@ -359,7 +569,18 @@ def collect_nodes(
 
 
 def score_post(d: Dict[str, Any], kind_hint: Optional[str]) -> int:
-    """Heuristically score a dict as a post candidate."""
+    """Score how likely a node is to represent a Reddit post.
+
+    Workflow role:
+        Heuristic ranking input for selecting one canonical post object per file.
+
+    Args:
+        d: Candidate dictionary node.
+        kind_hint: Optional Reddit listing kind hint.
+
+    Returns:
+        Heuristic score where higher means more post-like.
+    """
     score = 0
     if kind_hint == "t3":
         score += 5
@@ -377,7 +598,18 @@ def score_post(d: Dict[str, Any], kind_hint: Optional[str]) -> int:
 
 
 def score_comment(d: Dict[str, Any], kind_hint: Optional[str]) -> int:
-    """Heuristically score a dict as a comment candidate."""
+    """Score how likely a node is to represent a Reddit comment.
+
+    Workflow role:
+        Heuristic filter for collecting comment candidates from noisy payloads.
+
+    Args:
+        d: Candidate dictionary node.
+        kind_hint: Optional Reddit listing kind hint.
+
+    Returns:
+        Heuristic score where higher means more comment-like.
+    """
     score = 0
     if kind_hint == "t1":
         score += 5
@@ -396,7 +628,20 @@ def find_post_and_comments(
     Optional[Tuple[Dict[str, Any], str]],
     List[Tuple[Dict[str, Any], str]],
 ]:
-    """Select the best post candidate and collect comment candidates."""
+    """Find the best post candidate and all comment candidates in JSON data.
+
+    Workflow role:
+        Bridges structural traversal and text matching by deciding which nodes
+        become the post plus comment stream for ``process_file``.
+
+    Args:
+        obj: Parsed JSON object from one source file.
+
+    Returns:
+        Tuple ``(post_info, comments)`` where ``post_info`` is
+        ``(post_node, post_path)`` or ``None``, and ``comments`` is a list of
+        ``(comment_node, comment_path)``.
+    """
     candidates: List[Tuple[int, Dict[str, Any], str]] = []
     comments: List[Tuple[Dict[str, Any], str]] = []
     for node, path, kind_hint in collect_nodes(obj):
@@ -415,7 +660,18 @@ def find_post_and_comments(
 
 
 def build_phrase_pattern(phrase: str, whole_word: bool) -> str:
-    """Build a regex pattern for a phrase with optional word boundaries."""
+    """Build a regex-safe pattern for one keyword phrase.
+
+    Workflow role:
+        Converts one rule into a safe regex fragment used in chunk compilation.
+
+    Args:
+        phrase: Keyword phrase to escape.
+        whole_word: Whether to enforce token boundaries when possible.
+
+    Returns:
+        Regex pattern string for the phrase.
+    """
     escaped = re.escape(phrase)
     if whole_word and phrase and phrase[0].isalnum() and phrase[-1].isalnum():
         return r"(?<!\w)" + escaped + r"(?!\w)"
@@ -428,7 +684,22 @@ def build_regex_chunks(
     whole_word: bool,
     chunk_size: int = 500,
 ) -> List[Tuple[re.Pattern, List[Tuple[int, str]]]]:
-    """Compile keywords into regex chunks to avoid huge patterns."""
+    """Compile keyword regex chunks and preserve keyword-ID mapping.
+
+    Workflow role:
+        Precomputes matchers once per run so file processing reuses compiled
+        patterns instead of recompiling per content item.
+
+    Args:
+        keywords: Ordered keyword list.
+        case_sensitive: Whether matching is case-sensitive.
+        whole_word: Whether to enforce word boundaries.
+        chunk_size: Max keywords per compiled regex chunk.
+
+    Returns:
+        List of ``(compiled_regex, mapping)`` tuples. Mapping stores
+        ``(keyword_id, keyword_text)`` in capturing-group order.
+    """
     flags = re.UNICODE
     if not case_sensitive:
         flags |= re.IGNORECASE
@@ -437,6 +708,7 @@ def build_regex_chunks(
         chunk = keywords[i : i + chunk_size]
         mappings: List[Tuple[int, str]] = []
         parts: List[str] = []
+        # Capturing-group order is used to map matches back to keyword IDs.
         for j, kw in enumerate(chunk, start=i + 1):
             mappings.append((j, kw))
             parts.append(f"({build_phrase_pattern(kw, whole_word)})")
@@ -449,7 +721,19 @@ def find_keyword_matches(
     text: str,
     regex_chunks: List[Tuple[re.Pattern, List[Tuple[int, str]]]],
 ) -> Dict[int, str]:
-    """Find matched keyword ids for a single text."""
+    """Find keyword matches for a single text value.
+
+    Workflow role:
+        Executes matching for one post/comment text and returns unique keyword
+        hits for row emission and aggregate counting.
+
+    Args:
+        text: Content text to scan.
+        regex_chunks: Compiled regex chunks with keyword mapping metadata.
+
+    Returns:
+        Mapping from keyword ID to keyword text for unique matches.
+    """
     matched: Dict[int, str] = {}
     if not text:
         return matched
@@ -474,7 +758,20 @@ def process_file(
     List[Dict[str, str]],
     Dict[int, Tuple[Set[str], Set[str]]],
 ]:
-    """Process one JSON file and return tagged rows plus per-keyword hit sets."""
+    """Process one JSON file into tagged rows and aggregate hit sets.
+
+    Workflow role:
+        Core per-file worker: parse JSON, detect post/comments, extract fields,
+        match keywords, emit rows, and accumulate per-keyword hit sets.
+
+    Args:
+        path: JSON file path.
+        regex_chunks: Compiled keyword regex chunks.
+
+    Returns:
+        Tuple ``(ok, post_count, comment_count, fallback_comment_count, rows, keyword_hits)``.
+        ``keyword_hits`` maps keyword IDs to ``(post_ids, content_ids)`` sets.
+    """
     data = load_json(path)
     if data is None:
         return False, 0, 0, 0, [], {}
@@ -498,6 +795,7 @@ def process_file(
     keyword_hits: Dict[int, Tuple[Set[str], Set[str]]] = {}
 
     def record_hit(kw_id: int, content_id: str) -> None:
+        """Track aggregate hit sets used later for phrases summary output."""
         if kw_id not in keyword_hits:
             keyword_hits[kw_id] = (set(), set())
         keyword_hits[kw_id][0].add(root_post_id)
@@ -600,7 +898,15 @@ def process_file(
 
 
 def write_tagged_csv(path: Path, rows: List[Dict[str, str]]) -> None:
-    """Write tagged content rows to CSV."""
+    """Write the detailed match table to ``tagged_content.csv`` format.
+
+    Workflow role:
+        Persists row-level match details consumed by downstream analysis.
+
+    Args:
+        path: Output CSV path.
+        rows: Tagged content rows, one per ``(content, keyword)`` match.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "root_post_id",
@@ -628,7 +934,17 @@ def write_phrases_csv(
     keyword_posts: Dict[int, Set[str]],
     keyword_contents: Dict[int, Set[str]],
 ) -> None:
-    """Write per-keyword aggregate counts to CSV."""
+    """Write phrase-level summary metrics to ``phrases_found.csv`` format.
+
+    Workflow role:
+        Persists per-keyword aggregates derived from merged per-file hit sets.
+
+    Args:
+        path: Output CSV path.
+        keywords: Ordered keyword list.
+        keyword_posts: Keyword ID to set of matched root post IDs.
+        keyword_contents: Keyword ID to set of matched content IDs.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -640,7 +956,17 @@ def write_phrases_csv(
 
 
 def _read_rules_csv(rules_path: Path) -> list:
-    """Read the full rules CSV as a list of dicts."""
+    """Read rules CSV rows for XLSX export without dropping columns.
+
+    Workflow role:
+        Supports report traceability by embedding original rules rows in XLSX.
+
+    Args:
+        rules_path: Path to rules CSV.
+
+    Returns:
+        List of raw row dictionaries as read by ``csv.DictReader``.
+    """
     sample_text = rules_path.read_text(
         encoding="utf-8-sig", errors="replace"
     )
@@ -660,7 +986,24 @@ def write_xlsx(
     rules_path: Path,
     run_metadata: Dict[str, str],
 ) -> None:
-    """Write tagged content, phrases, coding rules, and metadata to XLSX."""
+    """Write multi-sheet XLSX output for detailed and summary reporting.
+
+    Workflow role:
+        Produces a single report artifact combining detailed rows, aggregates,
+        source rules, and run metadata.
+
+    Args:
+        path: Output XLSX path.
+        tagged_rows: Detailed tagged content rows.
+        keywords: Ordered keyword list.
+        keyword_posts: Keyword ID to set of matched root post IDs.
+        keyword_contents: Keyword ID to set of matched content IDs.
+        rules_path: Source rules CSV path.
+        run_metadata: Runtime metadata values for the metadata sheet.
+
+    Raises:
+        RuntimeError: If pandas cannot be imported for XLSX writing.
+    """
     try:
         import pandas as pd  # type: ignore
     except Exception as exc:
@@ -668,6 +1011,7 @@ def write_xlsx(
             "pandas is required to write XLSX output."
         ) from exc
 
+    # Build phrase summary rows in deterministic keyword-ID order.
     phrases_rows: List[Dict[str, Any]] = []
     for idx, kw in enumerate(keywords, start=1):
         phrases_rows.append(
@@ -694,6 +1038,7 @@ def write_xlsx(
     ]
 
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Keep sheet names stable; the self-test validates this contract.
     with pd.ExcelWriter(path) as writer:
         pd.DataFrame(tagged_rows).to_excel(
             writer, sheet_name="tagged_content", index=False
@@ -710,7 +1055,17 @@ def write_xlsx(
 
 
 def format_command_line(argv: List[str]) -> str:
-    """Render argv as a command line string."""
+    """Format argv as a shell-like command string for metadata.
+
+    Workflow role:
+        Captures reproducibility metadata for the XLSX ``metadata`` sheet.
+
+    Args:
+        argv: Raw argument vector.
+
+    Returns:
+        Platform-appropriate command-line string.
+    """
     if os.name == "nt":
         return subprocess.list2cmdline(argv)
     try:
@@ -727,7 +1082,23 @@ def with_timestamp_affix(
     add_prefix: bool,
     add_suffix: bool,
 ) -> Path:
-    """Return a path whose filename includes a timestamp prefix or suffix."""
+    """Apply optional timestamp prefix/suffix naming to a file path.
+
+    Workflow role:
+        Implements output naming policy so multiple runs can coexist cleanly.
+
+    Args:
+        path: Base output path.
+        timestamp: Timestamp token in ``YYYYMMDD-HHMMSS`` format.
+        add_prefix: Whether to prepend timestamp to filename.
+        add_suffix: Whether to append timestamp to filename stem.
+
+    Returns:
+        Path with adjusted filename.
+
+    Raises:
+        ValueError: If both prefix and suffix flags are set.
+    """
     if add_prefix and add_suffix:
         raise ValueError("Timestamp prefix and suffix are mutually exclusive.")
     if add_prefix:
@@ -738,7 +1109,18 @@ def with_timestamp_affix(
 
 
 def run(args: argparse.Namespace) -> int:
-    """Main processing pipeline."""
+    """Execute the end-to-end tagging pipeline for parsed CLI args.
+
+    Workflow role:
+        Orchestrator for the full run lifecycle: validate inputs, compile
+        patterns, process files, merge aggregates, and write outputs.
+
+    Args:
+        args: Parsed command-line namespace.
+
+    Returns:
+        Process exit code (``0`` on success, ``1`` on failure).
+    """
     data_dir = Path(args.data_dir).resolve()
     rules_path = Path(args.rules)
     run_metadata = {
@@ -748,6 +1130,7 @@ def run(args: argparse.Namespace) -> int:
     }
     output_dir_value = getattr(args, "output_dir", None)
     output_dir = Path(output_dir_value) if output_dir_value else None
+    # Explicit output paths override output-dir defaults.
     out_tagged = Path(args.out_tagged) if args.out_tagged else (
         (output_dir / "tagged_content.csv") if output_dir else Path("tagged_content.csv")
     )
@@ -767,6 +1150,7 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
     if add_timestamp_prefix or add_timestamp_suffix:
+        # One shared timestamp keeps all output filenames aligned.
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         out_tagged = with_timestamp_affix(
             out_tagged, timestamp, add_timestamp_prefix, add_timestamp_suffix
@@ -790,6 +1174,7 @@ def run(args: argparse.Namespace) -> int:
         LOG.error("--threads must be >= 1")
         return 1
 
+    # Compile regex chunks once, then reuse for every file.
     keywords = load_keywords_csv(rules_path, args.case_sensitive)
     regex_chunks = build_regex_chunks(
         keywords, case_sensitive=args.case_sensitive, whole_word=args.whole_word
@@ -868,7 +1253,15 @@ def run(args: argparse.Namespace) -> int:
 
 
 def run_self_test() -> int:
-    """Run a self-test with synthetic data and output validation."""
+    """Run an integration self-test on temporary synthetic data.
+
+    Workflow role:
+        Validates the full production pipeline contract (outputs and schema)
+        using a deterministic in-memory fixture written to temp files.
+
+    Returns:
+        Process exit code (``0`` on success, ``1`` on failure).
+    """
     LOG.info("Running self-test...")
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)
@@ -879,6 +1272,7 @@ def run_self_test() -> int:
         out_phrases = base / "phrases_found.csv"
         out_xlsx = base / "results.xlsx"
 
+        # Minimal fixture with one post and two comments; only two texts mention "AI".
         sample = {
             "id": "abc123",
             "subreddit": "testsub",
@@ -894,6 +1288,7 @@ def run_self_test() -> int:
         (data_dir / "sample.json").write_text(json.dumps(sample), encoding="utf-8")
         rules_path.write_text("keyword\nAI\n test \nAI\n", encoding="utf-8")
 
+        # Reuse the normal runtime pipeline with temporary paths.
         args = argparse.Namespace(
             data_dir=str(data_dir),
             rules=str(rules_path),
@@ -911,6 +1306,7 @@ def run_self_test() -> int:
             LOG.error("Self-test pipeline failed with code %d", code)
             return code
 
+        # Verify all declared output artifacts are present.
         for output_path in (out_tagged, out_phrases, out_xlsx):
             if not output_path.exists():
                 LOG.error("Self-test missing output: %s", output_path)
@@ -957,6 +1353,7 @@ def run_self_test() -> int:
             )
             return 1
 
+        # Confirm report sheet contract used by downstream users.
         sheets: set[str] = {
             str(sheet_name)
             for sheet_name in pd.ExcelFile(out_xlsx).sheet_names
@@ -1010,7 +1407,15 @@ def run_self_test() -> int:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    """Build CLI argument parser."""
+    """Construct the CLI argument parser.
+
+    Workflow role:
+        Defines the external interface consumed by ``main`` before dispatching
+        into ``run``.
+
+    Returns:
+        Configured ``argparse.ArgumentParser`` instance.
+    """
     parser = argparse.ArgumentParser(
         description="Tag Reddit posts/comments by matching keyword phrases."
     )
@@ -1078,7 +1483,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """CLI entry point."""
+    """Parse CLI args, initialize logging, and run the selected mode.
+
+    Workflow role:
+        Thin entrypoint that routes either to ``run_self_test`` or the normal
+        ``run`` pipeline.
+
+    Returns:
+        Process exit code.
+    """
     if "--self-test" in sys.argv:
         setup_logging()
         return run_self_test()
