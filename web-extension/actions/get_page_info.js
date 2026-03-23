@@ -32,6 +32,7 @@
 
         return {
             type: 'index',
+            href: location.href,
             name: location.pathname.match(/\/r\/([^\/]+)/)[1],
             sort,
             prevPageUrl: prevEl?.href || null,
@@ -40,10 +41,12 @@
     } else if (bodyEl.classList.contains('comments-page')) {
         return {
             type: 'thread',
+            href: location.href,
         }
     } else {
         return {
             type: 'unsupported',
+            href: location.href,
         }
     }
 })()

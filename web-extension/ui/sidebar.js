@@ -7,8 +7,9 @@ function getDelayInMs() {
 /**
  * Wait for some amount of time
  * @param {number} time
+ * @param {() => boolean} earlyResolve
  */
-function wait(time) {
+function wait(time, earlyResolve) {
     // Randomize time
     const delta = time * 0.35
     const min = -delta
@@ -17,7 +18,36 @@ function wait(time) {
     const randomTime = time + Math.random() * (max - min) + min
 
     // https://stackoverflow.com/a/39914235
-    const promise = new Promise((resolve) => setTimeout(resolve, randomTime))
+    const promise = new Promise((resolve) => {
+        let earlyResolveId = null
+
+        // Schedule promise resolve
+        const resolveId = setTimeout(() => {
+            // Clear early resolve interval, if it was set
+            if (earlyResolveId !== null) {
+                clearInterval(earlyResolveId)
+            }
+
+            // Resolve promise at scheduled time
+            resolve()
+        }, randomTime)
+
+        if (typeof earlyResolve === 'function') {
+            // Run periodic checks for early wait resolve
+            earlyResolveId = setInterval(() => {
+                // Run passed callback
+                const shouldResolveNow = earlyResolve()
+
+                if (shouldResolveNow) {
+                    // Cancel scheduled wait resolve
+                    clearTimeout(resolveId)
+
+                    // Resolve now
+                    resolve()
+                }
+            }, 200)
+        }
+    })
 
     return {
         promise,
@@ -25,13 +55,51 @@ function wait(time) {
     }
 }
 
-async function runAction(scriptName) {
-    // Run script from `actions` folder in a current tab
-    const [result] = await browser.tabs.executeScript(undefined, {
-        file: `/actions/${scriptName}`,
-    })
+/**
+ * @template TResult
+ * @typedef {Object} ActionResult
+ * @property {boolean} success
+ * @property {TResult|null} result
+ * @property {string|null} errorMessage
+ */
 
-    return result
+/**
+ * Inject script from `actions` folder into current tab and return value calculated by it
+ * @template TResult
+ * @see https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabs/executeScript#examples
+ * @param {string} scriptName
+ * @returns {Promise<ActionResult<TResult>>}
+ */
+async function runAction(scriptName) {
+    try {
+        // Try to run script from `actions` folder in a current tab
+        const [result] = await browser.tabs.executeScript(undefined, {
+            file: `/actions/${scriptName}`,
+        })
+
+        if (!result) {
+            // Return error when result is empty
+            return {
+                success: false,
+                result: null,
+                errorMessage: `Action "${scriptName}" returned empty result`,
+            }
+        } else {
+            // Return action result
+            return {
+                success: true,
+                result,
+                errorMessage: null,
+            }
+        }
+    } catch (e) {
+        // Return error message
+        return {
+            success: false,
+            result: null,
+            errorMessage: e,
+        }
+    }
 }
 
 async function changeURL(url) {
@@ -74,6 +142,47 @@ function pickFile() {
     })
 }
 
+/**
+ *
+ * @param {string} errorMessage
+ */
+function logError(errorMessage) {
+    const listEl = document.getElementById('logs-list')
+
+    const entryEl = document.createElement('li')
+    const timeEl = document.createElement('time')
+    const textEl = document.createElement('span')
+
+    timeEl.innerText = new Date(Date.now()).toLocaleTimeString('pl-PL', {
+        timeStyle: 'medium',
+    })
+
+    textEl.innerText = errorMessage
+
+    entryEl.appendChild(timeEl)
+    entryEl.appendChild(textEl)
+
+    if (listEl.childNodes.length <= 0) {
+        listEl.appendChild(entryEl)
+    } else {
+        listEl.insertBefore(entryEl, listEl.firstChild)
+    }
+}
+
+/**
+ * Return current time for a file name
+ * @returns {string}
+ */
+function getCurrentTimeForFilename() {
+    const time = new Date(Date.now())
+        .toLocaleString('pl-PL', { dateStyle: 'short', timeStyle: 'short' })
+        .replaceAll(':', '')
+        .replaceAll('.', '')
+        .replaceAll(', ', '_')
+
+    return time
+}
+
 class GetFullIndexTask {
     #statusEl
     #startButtonEl
@@ -106,29 +215,65 @@ class GetFullIndexTask {
 
     #stopFlagRaised
 
+    /**
+     * Start crawling through index page
+     */
     async start() {
+        let fileName = null
         let fullIndex = []
-        let currentPageInfo
         let count = 1
 
         this.#showStopButton()
 
         while (true) {
+            // Exit on stop button press
             if (this.#stopFlagRaised) {
                 break
             }
 
-            // Get info about current page
-            currentPageInfo = await runAction('get_page_info.js')
+            // Try to get info about current page
+            const pageInfo = await runAction('get_page_info.js')
 
-            // Get current page index entries
-            const currentIndex = await runAction('get_index.js')
-            fullIndex.push(...currentIndex)
+            // If we can't determine page type, log error and stop crawling
+            if (!pageInfo.success) {
+                logError(`Błąd skryptu: ${pageInfo.errorMessage}`)
+                break
+            }
+
+            // Check if we're on a index page. If not, stop crawling
+            if (pageInfo.result.type !== 'index') {
+                logError(
+                    `Natrafiono na stronę, która nie jest indeksem: ${pageInfo.result.href}. Zbieranie indeksu zostanie zakończone`,
+                )
+                break
+            }
+
+            // Set index file name if not already set
+            if (fileName === null) {
+                fileName = `${pageInfo.result.name}_${pageInfo.result.sort}_${getCurrentTimeForFilename()}.json`
+            }
+
+            // Try to get current page index entries
+            const index = await runAction('get_index.js')
+
+            if (!index.success) {
+                logError(
+                    `Błąd skryptu: "${index.errorMessage}". Strona ${pageInfo.result.href} zostanie pominięta`,
+                )
+            } else {
+                // Add found entries to collection
+                fullIndex.push(...index.result)
+            }
 
             // Go to a next index page, if it does exist
-            if (currentPageInfo.nextPageUrl) {
-                await changeURL(currentPageInfo.nextPageUrl)
-                const { promise, randomTime } = wait(getDelayInMs())
+            if (pageInfo.result.nextPageUrl) {
+                await changeURL(pageInfo.result.nextPageUrl)
+
+                // Wait until random delay elapses or stop button is pressed
+                const { promise, randomTime } = wait(
+                    getDelayInMs(),
+                    () => this.#stopFlagRaised,
+                )
 
                 this.#statusEl.innerText = `Odwiedzone strony: ${count}\nCzas oczekiwania: ${Math.floor(randomTime / 1000)}s`
                 await promise
@@ -140,8 +285,11 @@ class GetFullIndexTask {
         }
 
         if (fullIndex.length > 0) {
-            const filename = `${currentPageInfo.name}, ${currentPageInfo.sort}.json`
-            await downloadObjectAsJSON(fullIndex, filename)
+            await downloadObjectAsJSON(
+                fullIndex,
+                fileName ||
+                    `Unknown_subreddit_index_${getCurrentTimeForFilename()}.json`,
+            )
         }
 
         this.#showStartButton()

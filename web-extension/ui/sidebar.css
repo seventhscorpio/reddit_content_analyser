@@ -101,3 +101,30 @@ body > section.task > button:hover {
     outline: 2px solid white;
     outline-offset: 2px;
 }
+
+body > section.logs {
+    background-color: #ff4500;
+    color: white;
+}
+
+#logs-list {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+#logs-list:empty::after {
+    content: 'Brak błędów';
+    display: block;
+}
+
+#logs-list > li > time {
+    background-color: white;
+    color: #ff4500;
+    padding: 2px 4px;
+    margin-right: 8px;
+    font-size: 12px;
+}
