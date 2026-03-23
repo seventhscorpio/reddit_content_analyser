@@ -167,6 +167,8 @@ function logError(errorMessage) {
     } else {
         listEl.insertBefore(entryEl, listEl.firstChild)
     }
+
+    listEl.scrollIntoView()
 }
 
 /**
@@ -219,7 +221,7 @@ class GetFullIndexTask {
      * Start crawling through index page
      */
     async start() {
-        let fileName = null
+        let filename = null
         let fullIndex = []
         let count = 1
 
@@ -249,8 +251,8 @@ class GetFullIndexTask {
             }
 
             // Set index file name if not already set
-            if (fileName === null) {
-                fileName = `${pageInfo.result.name}_${pageInfo.result.sort}_${getCurrentTimeForFilename()}.json`
+            if (filename === null) {
+                filename = `${pageInfo.result.name}_${pageInfo.result.sort}_${getCurrentTimeForFilename()}.json`
             }
 
             // Try to get current page index entries
@@ -287,7 +289,7 @@ class GetFullIndexTask {
         if (fullIndex.length > 0) {
             await downloadObjectAsJSON(
                 fullIndex,
-                fileName ||
+                filename ||
                     `Unknown_subreddit_index_${getCurrentTimeForFilename()}.json`,
             )
         }
@@ -373,11 +375,48 @@ class GetThreadTask {
         this.#hideIndexUI()
     }
 
+    /**
+     * Try to download a thread
+     * @returns {Promise<boolean>}
+     */
     async download() {
+        // Try to get info about current page
+        const pageInfo = await runAction('get_page_info.js')
+
+        // If we can't determine page type, log error and return false
+        if (!pageInfo.success) {
+            logError(`Błąd skryptu: ${pageInfo.errorMessage}`)
+            return false
+        }
+
+        // Check if we're on a thread page
+        if (pageInfo.result.type !== 'thread') {
+            logError(`Strona nie jest wątkiem: ${pageInfo.result.href}`)
+            return false
+        }
+
+        // Try to get thread content
         const thread = await runAction('get_thread.js')
 
-        const filename = `${thread.title}, ${thread.author}, ${thread.published}.json`
-        await downloadObjectAsJSON(thread, filename)
+        if (!thread.success) {
+            logError(`Błąd skryptu: ${thread.errorMessage}`)
+            return false
+        } else {
+            const { title, author, published } = thread.result
+            const filename = `${title}_${author}_${published}_${getCurrentTimeForFilename()}.json`
+
+            try {
+                await downloadObjectAsJSON(thread.result, filename)
+                return true
+            } catch (e) {
+                console.debug(e)
+
+                logError(
+                    `Wystąpił błąd podczas zapisywania wątku do pliku: ${thread.href}`,
+                )
+                return false
+            }
+        }
     }
 
     async loadIndex() {
@@ -410,12 +449,15 @@ class GetThreadTask {
 
             // Go to thread URL
             await changeURL(summary.url)
-            const { promise, randomTime } = wait(getDelayInMs())
+            const { promise, randomTime } = wait(
+                getDelayInMs(),
+                () => this.#stopFlagRaised,
+            )
 
             this.#statusEl.innerText = `Status pobierania: ${i}/${topRange}\nCzas oczekiwania: ${Math.floor(randomTime / 1000)}s`
             await promise
 
-            // Download
+            // Try to download a thread
             await this.download()
 
             if (this.#stopFlagRaised) {
