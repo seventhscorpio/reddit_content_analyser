@@ -14,7 +14,26 @@
         author: entry?.dataset.author,
         published: +entry?.dataset.timestamp,
         url: entry?.dataset.permalink,
+        score: getScoreFor(entry),
         comments: [],
+    }
+
+    /**
+     *
+     * @param {HTMLElement} containerEl
+     */
+    function getScoreFor(containerEl) {
+        return {
+            likes: +containerEl
+                .querySelector('.score.likes')
+                ?.getAttribute('title'),
+            dislikes: +containerEl
+                .querySelector('.score.dislikes')
+                ?.getAttribute('title'),
+            unvoted: +containerEl
+                .querySelector('.score.unvoted')
+                ?.getAttribute('title'),
+        }
     }
 
     /**
@@ -37,17 +56,7 @@
                 published: contentEl
                     .querySelector('time')
                     ?.getAttribute('datetime'),
-                score: {
-                    likes: +contentEl
-                        .querySelector('.score.likes')
-                        ?.getAttribute('title'),
-                    dislikes: +contentEl
-                        .querySelector('.score.dislikes')
-                        ?.getAttribute('title'),
-                    unvoted: +contentEl
-                        .querySelector('.score.unvoted')
-                        ?.getAttribute('title'),
-                },
+                score: getScoreFor(contentEl),
                 comments: [],
             }
 
